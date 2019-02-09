@@ -1,4 +1,4 @@
-import { Model, makePaths } from './model';
+import { Model, Urd } from '@urd/core';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 
 export function makeCompletions(mo: monaco.editor.ITextModel, position: monaco.Position, model: Model): any[] {
@@ -8,27 +8,22 @@ export function makeCompletions(mo: monaco.editor.ITextModel, position: monaco.P
     endLineNumber: position.lineNumber,
     endColumn: position.column
   });
-  const suggestions: any[] = [];
+  let suggestions: any[] = [];
 
-  const patterns = makePaths(model);
-  const paths = ['__root__'];
-  for (const line of textUntilPosition.split('\n')) {
-    if (line.match(/^\s*<([^\/].+)\:.+>/) || line.match(/^\s*<([^\/].+)>/)) {
-      paths.push(RegExp.$1);
-    } else if (line.match(/^\s*<\/(.+)\:.+>/) || line.match(/^\s*<\/(.+)>/)) {
-      paths.pop();
-    }
-  }
+  const patterns = Urd.makePatterns(model);
+  const paths = Urd.makePaths(textUntilPosition);
   const path = paths.join('.');
   patterns
     .filter(p => p.path === path)
     .forEach(p => {
       const documentation = `${path.replace(/__root__.?/, '')}: ${p.desc}`;
       let insertText = '';
-      if (['code', 'structure', 'text', 'type'].includes(p.type)) {
+      let command = null;
+      if (['code', 'structure', 'text', 'list'].includes(p.type)) {
         insertText = `<${p.id}>\n${'$0'}\n</${p.id}>`;
       } else {
         insertText = `${p.id}: `;
+        command = { id: 'editor.action.triggerSuggest', title: '' };
       }
       if (!suggestions.find(s => s.label === p.id)) {
         suggestions.push({
@@ -37,11 +32,58 @@ export function makeCompletions(mo: monaco.editor.ITextModel, position: monaco.P
           documentation,
           insertText,
           insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-          detail: p.type
+          detail: p.type,
+          command
         });
+        if (!['code'].includes(p.type)) {
+          suggestions.push({
+            label: '!' + p.id + '(evaluated)',
+            kind: monaco.languages.CompletionItemKind.Function,
+            documentation,
+            insertText: `<!${p.id}>\n${'$0'}\n</${p.id}>`,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            detail: p.type
+          });
+        }
       }
     });
 
-  console.log('suggestions :', suggestions);
+  const lines = textUntilPosition.split('\n');
+  const currLine = lines[lines.length - 1];
+  if (currLine.match(/(.+):(\s*)/)) {
+    const prop = RegExp.$1.trim();
+    const whitespace = RegExp.$2;
+    const pattern = patterns.find(p => p.path === path && p.id === prop);
+    suggestions = [];
+    if (pattern && pattern.suggestions)
+      suggestions = pattern.suggestions.map(text => {
+        return {
+          label: text,
+          kind: monaco.languages.CompletionItemKind.Property,
+          detail: 'suggestion',
+          insertText: whitespace ? text : ` ${text}`
+        };
+      });
+  }
   return suggestions;
+}
+
+export function registerAutoCompletion(editor: monaco.editor.IStandaloneCodeEditor) {
+  (editor as any).onDidType(function(text) {
+    if (text !== ':') return;
+
+    const model = editor.getModel();
+    const position = editor.getPosition();
+    const textUntilPosition = model.getValueInRange({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column
+    });
+    const lines = textUntilPosition.split('\n');
+    const currLine = lines[lines.length - 1];
+    if (currLine.match(/(.+):(\s*)/)) {
+      editor.trigger('anything', 'editor.action.triggerSuggest', {});
+    }
+  });
 }

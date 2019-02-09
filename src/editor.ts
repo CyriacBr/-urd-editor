@@ -8,109 +8,95 @@ import 'monaco-editor/esm/vs/editor/contrib/contextmenu/contextmenu.js';
 import 'monaco-editor/esm/vs/editor/contrib/codeAction/codeAction.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution';
-import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution';
-// import 'monaco-editor/esm/vs/language/typescript/monaco.contribution';
- import 'monaco-typescript-embeddable/release/esm/monaco.contribution';
-import { Model } from './model';
-import { makeTokenizer } from './tokenizer';
+import 'monaco-typescript-embeddable/release/esm/monaco.contribution';
+import { Model } from '@urd/core';
+import { makeTokenizer, applyTokenizer } from './tokenizer';
 import { makeCodelens } from './codelens';
-import { makeCompletions } from './completion';
+import { makeCompletions, registerAutoCompletion } from './completion';
 import { makeHoverMessage } from './hover';
+import { applyEmbeddable } from './embeddable';
+import { defineTheme } from './theme';
+import { langConfig } from './configuration';
 
-export function create(elementId: string, model: Model) {
-  monaco.languages.register({ id: 'userDeclaration' });
-  monaco.languages.setMonarchTokensProvider('userDeclaration', makeTokenizer(model) as any);
+export class UrdEditor {
+  editor: monaco.editor.IStandaloneCodeEditor;
 
-  const { Embeddable } = monaco.languages.typescript as any;
-  console.log('Embeddable :', Embeddable);
+  monacoEditor() {
+    return this.editor;
+  }
 
-  Embeddable.setup('userDeclaration');
-  Embeddable.setMakeModelContent(model => {
-    let text = model.getValue();
-    let inside = false;
-    let result = [];
-    let n = 0;
-    for (const line of text.split('\n')) {
-      if (line.match(/<myCode>/)) {
-        inside = true;
-        Embeddable.startBlock(n);
-        const delimiter = 'function myCode() {';
-        const extraChar = Embeddable.registerReplace(line, delimiter);
-        n += extraChar;
-        result.push(delimiter);
-      } else if (line.match(/<\/myCode>/)) {
-        inside = false;
-        const delimiter = '}';
-        const extraChar = Embeddable.registerReplace(line, delimiter);
-        n += extraChar;
-        Embeddable.endBlock(n);
-        result.push(delimiter);
-        break;
-      } else if (inside) {
-        result.push(line);
-      } else {
-        result.push(line.replace(/./gi, ' '));
+  addExtraLib(lib: string) {
+    monaco.languages.typescript.typescriptDefaults.addExtraLib(lib);
+  }
+
+  setText(text: string) {
+    this.editor.setValue(text);
+  }
+
+  getText() {
+    return this.editor.getValue();
+  }
+
+  setReadOnly(value: boolean) {
+    this.editor.updateOptions({ readOnly: value });
+  }
+
+  parse(): Object {
+    return {};
+  }
+
+  setModel(model: Model) {
+    applyEmbeddable(model, this.editor);
+    monaco.languages.typescript.getTypeScriptWorker().then(
+      resp => {
+        console.log('Worker has beed loaded');
+        // monaco.languages.setMonarchTokensProvider('userDeclaration', makeTokenizer(model) as any);
+        applyTokenizer(model);
+      },
+      err => {
+        console.log('Worker load error: ', err);
       }
-      n += line.length + 1;
-    }
-    return result.join('\n');
-  });
+    );
+    monaco.languages.registerHoverProvider('userDeclaration', {
+      provideHover: (m, position) => {
+        return makeHoverMessage(model, position, this.editor) as any;
+      }
+    });
 
-  monaco.editor.defineTheme('urd-dark', {
-    base: 'vs-dark',
-    inherit: true,
-    colors: {
-      'editor.foreground': '#FFFFFF'
-    },
-    rules: [
-      { token: 'prop', foreground: '#98c379' },
-      { token: 'tag', foreground: '#e06c75' /*fontStyle: 'bold'*/ },
-      { token: 'prop-tag', foreground: '#98c379' },
-      { token: 'tag-param', foreground: '#d19a66', fontStyle: 'italic' }
-      // { token: 'text', foreground: '#98c379' }
-    ]
-  });
+    monaco.languages.registerCompletionItemProvider('userDeclaration', {
+      provideCompletionItems: (m, position) => {
+        return { suggestions: makeCompletions(m, position, model) as any };
+      }
+    });
+  }
 
-  let editor = monaco.editor.create(document.getElementById(elementId), {
-    theme: 'urd-dark',
-    value: getCode(),
-    language: 'userDeclaration',
-    lightbulb: {
-      enabled: true
-    }
-  });
+  create(element: HTMLElement, model: Model) {
+    monaco.languages.register({ id: 'userDeclaration' });
+    monaco.languages.setLanguageConfiguration('userDeclaration', langConfig);
+    defineTheme();
+    this.editor = monaco.editor.create(element, {
+      theme: 'urd-dark',
+      language: 'userDeclaration',
+      lightbulb: {
+        enabled: true
+      },
+      fontWeight: '600',
+      minimap: {
+        enabled: false
+      }
+    });
+    this.setModel(model);
 
-  /*monaco.languages.registerCodeLensProvider('userDeclaration', {
-    provideCodeLenses: function(m, token) {
-      return makeCodelens(model, editor) as any;
+    /*monaco.languages.registerCodeLensProvider('userDeclaration', {
+    provideCodeLenses: (m, token) => {
+      return makeCodelens(model, this.editor) as any;
     }
   })*/
-  monaco.languages.registerHoverProvider('userDeclaration', {
-    provideHover: function(m, position) {
-      return makeHoverMessage(model, position, editor) as any;
-    }
-  });
+    registerAutoCompletion(this.editor);
 
-  monaco.languages.registerFoldingRangeProvider('userDeclaration', {
-    provideFoldingRanges: function(model, context, token) {
-      return [
-        {
-          start: 15,
-          end: 22
-        }
-      ];
-    }
-  });
-
-  monaco.languages.registerCompletionItemProvider('userDeclaration', {
-    provideCompletionItems: function(m, position) {
-      console.log('COMPLETION');
-      return { suggestions: makeCompletions(m, position, model) as any };
-    }
-  });
-
+    /*
   monaco.languages.registerCodeActionProvider('userDeclaration', {
-    provideCodeActions: function(model, range, context, token) {
+    provideCodeActions: (model, range, context, token) => {
       console.log('CODE_ACTION');
       return [
         {
@@ -123,93 +109,6 @@ export function create(elementId: string, model: Model) {
         }
       ];
     }
-  });
-
-  const myCondition1 = editor.createContextKey(/*key name*/ 'myCondition1', /*default value*/ false);
-  editor.onContextMenu(function(e) {
-    console.log('LMAO');
-    myCondition1.set(true);
-  });
-
-  editor.addAction({
-    // An unique identifier of the contributed action.
-    id: 'my-unique-id',
-
-    // A label of the action that will be presented to the user.
-    label: 'My Label!!!',
-
-    // An optional array of keybindings for the action.
-    keybindings: [
-      monaco.KeyMod.CtrlCmd | monaco.KeyCode.F10,
-      // chord
-      monaco.KeyMod.chord(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KEY_K, monaco.KeyMod.CtrlCmd | monaco.KeyCode.KEY_M)
-    ],
-
-    // A precondition for this action.
-    precondition: 'myCondition1',
-
-    // A rule to evaluate on top of the precondition in order to dispatch the keybindings.
-    keybindingContext: null,
-
-    contextMenuGroupId: 'navigation',
-
-    contextMenuOrder: 1.5,
-
-    // Method that will be executed when the action is triggered.
-    // @param editor The editor instance is passed in as a convinience
-    run: function(ed) {
-      alert("i'm running => " + ed.getPosition());
-      return null;
-    }
-  });
-
-  function getCode() {
-    return `name: Marc
-
-<name>
-return 'Marc';
-</name>
-
-prop: test
-<prop>
-return 'test';
-</prop>
-
-<myList>
-item1
-item2
-</myList>
-
-<myText>
-Hello World
-</myText>
-
-<myCode>
-function addition(a,b) {
-    return a + b;
-}
-return addition(5,6);
-</myCode>
-
-<myObj>
-    num: lol
-
-    <num>
-    return 'lol';
-    </num>
-
-    <nestedList>
-    item1
-    item2
-    </nestedList>
-
-    <nestedText>
-    Hello world
-    </nestedText>
-
-    <nestedCode>
-    return 'Hello';
-    </nestedCode>
-</myObj>`;
+  });*/
   }
 }

@@ -1,9 +1,9 @@
-import { Model, makePaths } from './model';
+import { Model, Urd } from '@urd/core';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 
 export function makeCodelens(model: Model, editor: monaco.editor.IStandaloneCodeEditor) {
   const data = [];
-  const patterns = makePaths(model);
+  const patterns = Urd.makePatterns(model);
 
   const code = editor.getValue();
   const lineNumber = editor.getPosition().lineNumber;
